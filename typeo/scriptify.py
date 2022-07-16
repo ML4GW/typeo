@@ -16,7 +16,8 @@ from typing import (
     Union,
 )
 
-import hermes.typeo.actions as actions
+import typeo.actions as actions
+from typeo.doc_utils import parse_help, parse_doc
 
 if TYPE_CHECKING:
     try:
@@ -237,7 +238,7 @@ def _parse_array_like(
 
 
 def _parse_container(
-    annotation: _ANNOTATION, origin: _MAYBE_TYPE, kwargs: dict, type_: type
+    annotation: _ANNOTATION, origin: type, kwargs: dict, type_: type
 ) -> _MAYBE_TYPE:
     """Make sure container-like arguments pass the right type to the parser
 
@@ -261,103 +262,30 @@ def _parse_container(
         kwargs["nargs"] = "+"
         type_, action, choices = _parse_array_like(annotation, origin, type_)
 
+        # check if the type contained in the array-like
+        # annotation requires any kind of special action
+        # or is a literal and so needs specific choices
         if actions is not None:
             kwargs["action"] = action
         if choices is not None:
             kwargs["choices"] = choices
-        return type_
+
     elif origin is abc.Callable:
-        return origin
+        type_ = origin
     elif origin is Literal:
         type_, choices = _parse_literal(annotation)
         kwargs["choices"] = choices
-        return type_
-    elif origin is not None:
+    else:
         # this is a type with some unknown origin
         raise TypeError(f"Can't help with arg of type {origin}")
-    else:
-        return type_
 
-
-def _parse_help(args: str, arg_name: str) -> str:
-    """Find the help string for an argument
-
-    Search through the `Args` section of a function's
-    doc string for the lines describing a particular
-    argument. Returns the empty string if no description
-    is found
-
-    Args:
-        args:
-            The arguments section of a function docstring.
-            Should be formatted like
-            ```
-            '''
-            arg1:
-                The description for arg1
-            arg2:
-                The description for arg 2 that
-                spans multiple lines
-            arg3:
-                Another description
-            '''
-            ```
-            With 8 spaces before each argument name
-            and 12 before the lines of its description.
-        arg_name:
-            The name of the argument whose help string
-            to search for
-    Returns:
-        The help string for the argument with leading
-        spaces stripped for each line and newlines
-        replaced by spaces
-    """
-
-    doc_str, started = "", False
-    for line in args.split("\n"):
-        # TODO: more robustness on spaces
-        if line == (" " * 8 + arg_name + ":"):
-            started = True
-        elif not line.startswith(" " * 12) and started:
-            break
-        elif started:
-            doc_str += " " + line.strip()
-    return doc_str
-
-
-def _parse_doc(f: Callable):
-    """Grab any documentation and argument help from a function"""
-
-    # start by grabbing the function description
-    # and any arguments that might have been
-    # described in the docstring
-    try:
-        # split thet description and the args
-        # by the expected argument section header
-        doc, args = f.__doc__.split("Args:\n")
-    except AttributeError:
-        # raised if f doesn't have documentation
-        doc, args = "", ""
-    except ValueError:
-        # raised if f only has a description but
-        # no argument documentation. Set `args`
-        # to the empty string
-        doc, args = f.__doc__, ""
-    else:
-        # try to strip out any returns from the
-        # arguments section by using the expected
-        # returns header. If there are None, just
-        # keep moving
-        try:
-            args, _ = args.split("Returns:\n")
-        except ValueError:
-            pass
-
-    return doc, args
+    return type_
 
 
 def make_parser(
-    f: Callable, parser: argparse.ArgumentParser
+    f: Callable,
+    parser: argparse.ArgumentParser,
+    extends: Optional[Callable] = None
 ) -> Dict[str, bool]:
     """Build an argument parser for a function
 
@@ -366,7 +294,7 @@ def make_parser(
     annotations and docstrings (for help printing).
     The type support for annotations is pretty limited
     and needs more documenting here, but for a better
-    idea see the unit tests in `../tests/unit/test_typeo.py`.
+    idea see the unit tests in `../tests/unit/test_scriptify.py`.
 
     Args:
         f:
@@ -380,12 +308,26 @@ def make_parser(
             used for typeo config parsing.
     """
 
-    doc, args = _parse_doc(f)
+    doc, args = parse_doc(f)
+    parameters = inspect.sigantrue(f).parameters
+
+    if extends is not None:
+        extend_func, provided_args = extends
+        extended_parameters = inspect.signature(extended_func).parameters
+
+        for arg in provided_args:
+            extended_parameters.pop(arg)
+        for arg in parameters:
+            extended_parameters.pop(arg)
+        parameters.update(extended_parameters)
+
+        _, extended_args = parse_doc(extended_func)
+        args += "\n" + extended_args
 
     # now iterate through the arguments of f
     # and add them as options to the parser
     booleans = {}
-    for name, param in inspect.signature(f).parameters.items():
+    for name, param in parameters.items():
         annotation = param.annotation
         kwargs = {}
 
@@ -404,22 +346,23 @@ def make_parser(
             # see if it's a container of some kind
             origin, type_ = _get_origin_and_type(annotation, type_)
 
-        # if the origin of the annotation is array-like,
-        # indicate that there will be multiple args in the kwargs
-        # and return the appropriate type. This returns `None`
-        # if there's no origin to process, in which case we just
-        # keep using `type_`
-        type_ = _parse_container(annotation, origin, kwargs, type_)
+        if origin is not None:
+            # if the annotation has some sort of origin, this
+            # indicates a container type, so do some further
+            # parsing of it to see what types of objects this
+            # container is meant to contain so we can pass
+            # those to the parser
+            type_ = _parse_container(annotation, origin, kwargs, type_)
 
         # our last origin check to see if type_ is typing.Callable,
-        # in which case the origin will be abc.Callable whic
+        # in which case the origin will be abc.Callable which
         # is the type that we want
         origin, type_ = _get_origin_and_type(type_)
         if origin is not None:
             type_ = origin
 
         # add the argument docstring to the parser help
-        kwargs["help"] = _parse_help(args, name)
+        kwargs["help"] = parse_help(args, name)
 
         if type_ is bool:
             if param.default is inspect._empty:
@@ -452,15 +395,17 @@ def make_parser(
                 kwargs["action"] = actions.EnumAction
                 kwargs["choices"] = [i.value for i in type_]
 
-        # use dashes instead of underscores for
-        # argument names
+        # use dashes instead of underscores for argument names
         name = name.replace("_", "-")
         parser.add_argument(f"--{name}", **kwargs)
     return booleans
 
 
 def _make_wrapper(
-    f: Callable, prog: Optional[str] = None, **kwargs
+    f: Callable,
+    prog: Optional[str] = None,
+    extends: Optional[Callable] = None,
+    **kwargs
 ) -> Callable:
     # start with a parent parser that will initially
     # try to parse a typeo toml config argument
@@ -484,7 +429,7 @@ def _make_wrapper(
         formatter_class=CustomHelpFormatter,
         parents=[parent_parser],
     )
-    booleans = make_parser(f, parser)
+    booleans = make_parser(f, parser, extends)
 
     # if we have subcommands, add subparsers for each
     # one of them with their own arguments
@@ -570,12 +515,38 @@ def _make_wrapper(
             if isinstance(result, dict):
                 subkw.update(result)
             result = subcommand(**subkw)
+
+        if extends is not None:
+            extend_func, provided_args = extends
+            if len(provided_args) == 1:
+                kw[provided_args[0]] = result
+            elif len(provided_args) != len(result):
+                # TODO: check if result doesn't have a __len__
+                raise ValueError(
+                    "Expected function {} to return {} arguments {} "
+                    "for use in function {}, but only found {}".format(
+                        f.__name__,
+                        len(provided_args),
+                        ", ".join(provided_args),
+                        extended_func.__name__
+                    )
+                )
+                for arg, val in zip(provided_args, result):
+                    kw[arg] = val
+
+            extend_params = inspect.signature(extend).parameters
+            extend_kwargs = {}
+            for arg, value in kw.items():
+                if arg in extend_params:
+                    extend_kwargs[arg] = value
+
+            result = extend_func(**extend_kwargs)
         return result
 
     return wrapper
 
 
-def typeo(*args, **kwargs) -> Callable:
+def scriptify(*args, **kwargs) -> Callable:
     """Function wrapper for passing command line args to functions
 
     Builds a command line parser for the arguments
@@ -586,10 +557,10 @@ def typeo(*args, **kwargs) -> Callable:
     Usage:
         If your file `adder.py` looks like ::
 
-            from hermes.typeo import typeo
+            from typeo import scriptify
 
 
-            @typeo
+            @scriptify
             def f(a: int, other_number: int = 1) -> int:
                 '''Adds two numbers together
 
@@ -648,7 +619,7 @@ def typeo(*args, **kwargs) -> Callable:
         # decorated function, so wrap the wrapper
         # using the provided arguments
 
-        @wraps(typeo)
+        @wraps(scriptify)
         def wrapperwrapper(f):
             return _make_wrapper(f, *args, **kwargs)
 
@@ -724,6 +695,6 @@ def spoof(
 
     argv = sys.argv
     sys.argv = [None] + list(args)
-    kwargs = typeo(wrapper)()
+    kwargs = scriptify(wrapper)()
     sys.argv = argv
     return kwargs

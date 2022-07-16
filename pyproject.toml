@@ -1,12 +1,9 @@
 [tool.poetry]
-name = "hermes.typeo"
+name = "typeo"
 version = "0.1.5"
 description = "Utilities for running functions as scripts"
 authors = ["Alec Gunny <alec.gunny@gmail.com>"]
 readme = "README.md"
-packages = [
-    {include = "hermes"}
-]
 
 [tool.poetry.dependencies]
 python = "^3.8"
