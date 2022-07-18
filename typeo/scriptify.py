@@ -265,7 +265,7 @@ def _parse_container(
         # check if the type contained in the array-like
         # annotation requires any kind of special action
         # or is a literal and so needs specific choices
-        if actions is not None:
+        if action is not None:
             kwargs["action"] = action
         if choices is not None:
             kwargs["choices"] = choices
@@ -309,7 +309,7 @@ def make_parser(
     """
 
     doc, args = parse_doc(f)
-    parameters = inspect.sigantrue(f).parameters
+    parameters = inspect.signature(f).parameters
 
     if extends is not None:
         extend_func, provided_args = extends
@@ -345,6 +345,8 @@ def make_parser(
             # check the chosen type again to
             # see if it's a container of some kind
             origin, type_ = _get_origin_and_type(annotation, type_)
+            if origin in _ARRAY_ORIGINS:
+                kwargs["action"] = actions.MaybeIterableAction
 
         if origin is not None:
             # if the annotation has some sort of origin, this
@@ -422,7 +424,7 @@ def _make_wrapper(
     # the config parser can't understand. The point of
     # inheritance is so that the `-h` flag will trigger
     # help from this parser and include the '--typeo' flag
-    description, _ = _parse_doc(f)
+    description, _ = parse_doc(f)
     parser = argparse.ArgumentParser(
         prog=prog or f.__name__,
         description=description.rstrip(),
@@ -436,7 +438,7 @@ def _make_wrapper(
     if len(kwargs) > 0:
         subparsers = parser.add_subparsers(dest="_subcommand", required=True)
         for func_name, func in kwargs.items():
-            description, _ = _parse_doc(func)
+            description, _ = parse_doc(func)
             subparser = subparsers.add_parser(
                 func_name.replace("_", "-"),
                 description=description,

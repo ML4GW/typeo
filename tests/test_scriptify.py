@@ -14,12 +14,20 @@ from typeo import spoof, scriptify
     typing.Iterable,
     typing.Tuple,
     typing.Sequence,
-    pytest.Parameter(list, mark=">py38"),
-    pytest.Parameter(abc.Iterable, mark=">py38"),
-    pytest.Parameter(tuple, mark=">py38"),
-    pytest.Parameter(abc.Sequence, mark=">py38")
+    pytest.param(list, marks=pytest.mark.gtpy38),
+    pytest.param(abc.Iterable, marks=pytest.mark.gtpy38),
+    pytest.param(tuple, marks=pytest.mark.gtpy38),
+    pytest.param(abc.Sequence, marks=pytest.mark.gtpy38)
 ])
 def array_container(request):
+    return request.param
+
+
+@pytest.fixture(params=[
+    typing.Callable,
+    pytest.param(abc.Callable, marks=pytest.mark.gtpy38)
+])
+def callable_annotation(request):
     return request.param
 
 
@@ -35,14 +43,14 @@ def test_scriptify():
     # test simplest functionality
     assert func(1, 2) == scriptify(func)(1, 2) == 3
     set_argv("--a", "1", "--b", "2")
-    assert scriptify(func)() == 4
+    assert scriptify(func)() == 3
 
     # test that default is set correctly
     set_argv("--a", "2")
     assert scriptify(func)() == 12
 
     # now test that we can pass a name to the scriptify parser
-    assert scriptify("script name", func)() == 12
+    assert scriptify("script name")(func)() == 12
 
 
 @pytest.mark.depends(on=["test_scriptify"])
@@ -55,7 +63,7 @@ def test_scriptify_with_array_like(array_container):
     assert seq_func(arg) == "test"
     assert scriptify(seq_func)(arg) == "test"
 
-    set_arg("--a", *arg)
+    set_argv("--a", *arg)
     assert scriptify(seq_func)() == "test"
 
     # do some additional checks if we're looking at a tuple
@@ -79,7 +87,7 @@ def test_scriptify_with_array_like(array_container):
 @pytest.mark.depends(on=["test_scriptify"])
 def test_scriptify_with_optional_arg():
 
-    def optional_func(a: int, b: Optional[str] = None):
+    def optional_func(a: int, b: typing.Optional[str] = None):
         return (b or "test") * a
 
     # verify functionality
@@ -94,13 +102,13 @@ def test_scriptify_with_optional_arg():
     assert scriptify(optional_func)() == "not none"
 
     # make sure that optional args have a default of `None`
-    def bad_optional_func(a: Optional[str]):
+    def bad_optional_func(a: typing.Optional[str]):
         return
 
     with pytest.raises(ValueError):
         scriptify(bad_optional_func)
 
-    def bad_optional_func(a: Optional[str] = "nope"):
+    def bad_optional_func(a: typing.Optional[str] = "nope"):
         return
 
     with pytest.raises(ValueError):
@@ -111,13 +119,13 @@ def test_scriptify_with_optional_arg():
 @pytest.fixture(params=[True, False])
 def bad_second_annotation(request, array_container):
     if request:
-        return arry_container[int]
+        return array_container[int]
     return int
 
 
 @pytest.mark.depends(on="test_scriptify")
 @pytest.mark.parametrize(
-    "union", [None, pytest.Parameter("py310", mark=">py39")]
+    "union", [None, pytest.param("py310", marks=pytest.mark.gtpy39)]
 )
 def test_scriptify_with_union(array_container, union, bad_second_annotation):
     if union is None:
@@ -181,7 +189,7 @@ def test_subparsers():
 
 
 @pytest.mark.depends(on=["test_scriptify"])
-def test_enums():
+def test_enums(array_container):
     class Member(Enum):
         SINGER = "Thom"
         GUITAR = "Jonny"
@@ -205,37 +213,37 @@ def test_enums():
     # make sure that sequences of enums get
     # mapped to lists of the Enum instances
     @scriptify
-    def f(members: Sequence[Member]):
+    def f(members: array_container[Member]):
         return members
 
     set_argv("--members", "Thom", "Thom", "Jonny")
     assert f() == [Member.SINGER, Member.SINGER, Member.GUITAR]
 
 
-@pytest.fixture(params=[int, float, str, Callable])
-def literal_annotation(request)
+@pytest.fixture(params=[int, float, str, "callable"])
+def literal_annotation(request):
     if request.param == int:
         values = [10, 20]
         args = list(map(str, values))
-        annotation = Literal[10, 20]
+        annotation = typing.Literal[10, 20]
     elif request.param == float:
         values = [2.1, 3.2]
         args = list(map(str, values))
-        annotation = Literal[2.1, 3.2]
+        annotation = typing.Literal[2.1, 3.2]
     elif request.param == str:
         args = values = ["Thom", "Jonny"]
-        annotation = Literal["Thom", "Jonny"]
-    else:
+        annotation = typing.Literal["Thom", "Jonny"]
+    elif request.param == "callable":
         values = [math.sqrt, math.pow]
         args = ["math." + i.__name__ for i in values]
-        annotation = Literal[math.sqrt, math.pow]
+        annotation = typing.Literal[math.sqrt, math.pow]
 
     return annotation, args, values
 
 
 @pytest.mark.depends(on=["test_scriptify"])
 def test_scriptify_with_literal(array_container, literal_annotation):
-    annotation, values, args = literal_annotation
+    annotation, args, values = literal_annotation
 
     def f(member: annotation):
         return member
@@ -251,7 +259,7 @@ def test_scriptify_with_literal(array_container, literal_annotation):
 
 @pytest.mark.depends(on=["test_scriptify_with_literal"])
 def test_scriptify_with_containered_literals(array_container, literal_annotation):
-    annotation, values, args = literal_annotation
+    annotation, args, values = literal_annotation
     annotation = array_container[annotation]
 
     def f(member: annotation):
@@ -283,8 +291,7 @@ def test_blank_generics(array_container):
 
 
 @pytest.mark.depends(on=["test_maybe_sequence_funcs", "test_blank_generics"])
-@pytest.mark.parametrize("generic", [Iterable, List, Tuple, Sequence])
-def test_unions_with_blank_generics(generic):
+def test_unions_with_blank_generics(array_container):
     """Test generics used as the second argument to a Union
 
     Generic sequence types should default to the type
@@ -293,7 +300,7 @@ def test_unions_with_blank_generics(generic):
     """
 
     @scriptify
-    def blank_generic_func(a: Union[str, generic]):
+    def blank_generic_func(a: Union[str, array_container]):
         return [i + "a" for i in a]
 
     args = ["test", "one", "two"]
@@ -304,11 +311,11 @@ def test_unions_with_blank_generics(generic):
     # TODO: uncomment this when we implement
     # action for mapping to tuples
     # assert isinstance(result, generic)
-    assert isinstance(result, Sequence)
+    assert isinstance(result, abc.Sequence)
     assert result == [i + "a" for i in args]
 
     @scriptify
-    def blank_generic_func(a: Union[int, generic]):
+    def blank_generic_func(a: Union[int, array_container]):
         return [i + 2 for i in a]
 
     set_argv("--a", *"123")
@@ -316,11 +323,10 @@ def test_unions_with_blank_generics(generic):
 
 
 @pytest.mark.depends(on=["test_scriptify"])
-def test_callables():
-    import math
+def test_callables(array_container, callable_annotation):
 
     @scriptify
-    def func_of_func(f: Callable):
+    def func_of_func(f: callable_annotation):
         return f(3, 2)
 
     assert func_of_func(divmod) == (1, 1)
@@ -328,7 +334,7 @@ def test_callables():
     assert func_of_func() == 9
 
     @scriptify
-    def func_of_funcs(fs: Sequence[Callable]):
+    def func_of_funcs(fs: array_container[callable_annotation]):
         return sum([f(3) for f in fs])
 
     answer = math.sqrt(3) + math.log(3)

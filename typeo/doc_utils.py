@@ -42,7 +42,7 @@ def parse_help(args: str, arg_name: str) -> str:
     doc_str, started = "", False
     for line in args.splitlines():
         # TODO: more robustness on spaces
-        if arg_re.fullmatch(line)
+        if arg_re.fullmatch(line):
             started = True
         elif not line.startswith(" " * 12) and started:
             break
