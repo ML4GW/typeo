@@ -20,6 +20,9 @@ optional = true
 sphinx = "^4.1"
 sphinx-material = "^0.0.34"
 
+[tool.poetry.group.dev.dependencies]
+pre-commit = "^2.20.0"
+
 [build-system]
 requires = ["poetry>1.1"]
 build-backend = "poetry.masonry.api"
@@ -29,3 +32,21 @@ markers = [
     "gtpy38: tests for python version 3.9 and higher",
     "gtpy39: tests for pythong version 3.10 and higher"
 ]
+
+[tool.black]
+line-length = 79
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.tox
+  | _build
+  | dist
+  | docs
+)/
+'''
+
+[tool.isort]
+known_first_party = ["typeo"]
+multi_line_output = 3
+include_trailing_comma = true
