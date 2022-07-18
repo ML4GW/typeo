@@ -1,6 +1,7 @@
 import argparse
 import inspect
 import sys
+import types
 from collections import abc
 from enum import Enum
 from functools import wraps
@@ -61,7 +62,7 @@ def _parse_union(param: inspect.Parameter) -> Tuple[type, _MAYBE_TYPE]:
     except AttributeError:
         # if the second argument to Union doesn't have
         # an origin, it's not array-like and so is
-        # only allowed if its None (which basically
+        # only allowed if it's None (which basically
         # corresponds to the `Optional` case)
         try:
             # see if the second type in the Union is NoneType
@@ -282,6 +283,26 @@ def _parse_container(
     return type_
 
 
+def _standardize_none_origin(type_):
+    """
+    Standardize py39 and py310 annotations to the format
+    required to express them in py38
+    """
+
+    origin = None
+    if type_ in _ARRAY_ORIGINS:
+        # this will happen for untyped containers in py39+,
+        # so just treat it like the case for py38
+        origin, type_ = type_, None
+    else:
+        try:
+            if isinstance(type_, types.UnionType):
+                origin = Union
+        except AttributeError:
+            pass
+    return origin, type_
+
+
 def make_parser(
     f: Callable,
     parser: argparse.ArgumentParser,
@@ -340,10 +361,11 @@ def make_parser(
         # further parsing
         origin, type_ = _get_origin_and_type(annotation)
 
-        if origin is None and type_ in _ARRAY_ORIGINS:
-            # this will happen for untyped containers in py39+,
-            # so just treat it like the case for py38
-            origin, type_ = type_, None
+        if origin is None:
+            # do some standardization of things that are
+            # allowable in py39 and py310 that require a
+            # different syntax in py38
+            origin, type_ = _standardize_none_origin(type_)
 
         # if the annotation can have multiple types,
         # figure out which type to pass to the parser
