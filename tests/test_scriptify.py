@@ -350,6 +350,37 @@ def test_callables(array_container, callable_annotation):
 
 
 @pytest.mark.depends(on=["test_scriptify"])
+def test_scriptify_extends():
+    def reusable_func(a: int, b: str):
+        return a * b
+
+    def extending_func(c: int, **kwargs):
+        return c * 2
+
+    func = scriptify(extends=(reusable_func, ["a"]))(extending_func)
+    assert func(3) == 6
+
+    set_argv("--c", "2", "--b", "test")
+    assert func() == "test" * 4
+
+    # now test to make sure we can have arguments overlap
+    # between the extender and extendee, as long as they
+    # aren't the argument being extended
+    def extending_func(c: int, b: str, **kwargs):
+        if b == "Thom":
+            return c * 2
+        return c * 3
+
+    func = scriptify(extends=(reusable_func, ["a"]))(extending_func)
+    assert func(3, "Thom") == 6
+    assert func(3, "Jonny") == 9
+    assert func() == "test" * 6
+
+    set_argv("--c", "2", "--b", "Thom")
+    assert func() == "Thom" * 4
+
+
+@pytest.mark.depends(on=["test_scriptify"])
 def test_spoof():
     def simple_func(a: int, b: str):
         return b * a

@@ -309,17 +309,15 @@ def make_parser(
     """
 
     doc, args = parse_doc(f)
-    parameters = inspect.signature(f).parameters
+    parameters = dict(inspect.signature(f).parameters)
 
     if extends is not None:
         extend_func, provided_args = extends
         extend_parameters = inspect.signature(extend_func).parameters
 
-        for arg in provided_args:
-            extend_parameters.pop(arg)
-        for arg in parameters:
-            extend_parameters.pop(arg)
-        parameters.update(extend_parameters)
+        for arg, param in extend_parameters.items():
+            if arg not in provided_args and arg not in parameters:
+                parameters[arg] = param
 
         _, extended_args = parse_doc(extend_func)
         args += "\n" + extended_args
@@ -328,6 +326,11 @@ def make_parser(
     # and add them as options to the parser
     booleans = {}
     for name, param in parameters.items():
+        if param.kind == inspect._ParameterKind.VAR_KEYWORD:
+            # This skips **kwargs style arguments, which we won't
+            # be able to parse
+            continue
+
         annotation = param.annotation
         kwargs = {}
 
@@ -479,20 +482,22 @@ def _make_wrapper(
     # regularly
     @wraps(f)
     def wrapper(*args, **kw):
-        if len(args) == len(kw) == 0:
-            config_args, remainder = parent_parser.parse_known_args()
+        if not len(args) == len(kw) == 0:
+            # if any arguments at all were provided, run f normally
+            return f(*args, **kw)
 
-            if config_args.typeo is not None:
-                # TODO: what's the best way to have command line
-                # arguments override those in the typeo config?
-                if remainder:
-                    raise ValueError(
-                        "Found additional arguments '{}' when passing "
-                        "typeo config".format(remainder)
-                    )
-                kw = vars(parser.parse_args(config_args.typeo))
-            else:
-                kw = vars(parser.parse_args(remainder))
+        config_args, remainder = parent_parser.parse_known_args()
+        if config_args.typeo is not None:
+            # TODO: what's the best way to have command line
+            # arguments override those in the typeo config?
+            if remainder:
+                raise ValueError(
+                    "Found additional arguments '{}' when passing "
+                    "typeo config".format(remainder)
+                )
+            kw = vars(parser.parse_args(config_args.typeo))
+        else:
+            kw = vars(parser.parse_args(remainder))
 
         # see if a subprogram was specified
         try:
