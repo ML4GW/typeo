@@ -37,7 +37,7 @@ def parse_help(args: str, arg_name: str) -> str:
     """
 
     # TODO: more robustness on number of spaces
-    arg_re = re.compile(fr"(?m)(\s){{8}}{arg_name}:$")
+    arg_re = re.compile(rf"(?m)(\s){{8}}{arg_name}:$")
 
     doc_str, started = "", False
     for line in args.splitlines():

@@ -1,1 +1,1 @@
-from .scriptify import spoof, scriptify
+from .scriptify import scriptify, spoof

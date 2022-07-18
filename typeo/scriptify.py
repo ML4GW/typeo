@@ -17,7 +17,7 @@ from typing import (
 )
 
 import typeo.actions as actions
-from typeo.doc_utils import parse_help, parse_doc
+from typeo.doc_utils import parse_doc, parse_help
 
 if TYPE_CHECKING:
     try:
@@ -285,7 +285,7 @@ def _parse_container(
 def make_parser(
     f: Callable,
     parser: argparse.ArgumentParser,
-    extends: Optional[Callable] = None
+    extends: Optional[Callable] = None,
 ) -> Dict[str, bool]:
     """Build an argument parser for a function
 
@@ -313,15 +313,15 @@ def make_parser(
 
     if extends is not None:
         extend_func, provided_args = extends
-        extended_parameters = inspect.signature(extended_func).parameters
+        extend_parameters = inspect.signature(extend_func).parameters
 
         for arg in provided_args:
-            extended_parameters.pop(arg)
+            extend_parameters.pop(arg)
         for arg in parameters:
-            extended_parameters.pop(arg)
-        parameters.update(extended_parameters)
+            extend_parameters.pop(arg)
+        parameters.update(extend_parameters)
 
-        _, extended_args = parse_doc(extended_func)
+        _, extended_args = parse_doc(extend_func)
         args += "\n" + extended_args
 
     # now iterate through the arguments of f
@@ -407,7 +407,7 @@ def _make_wrapper(
     f: Callable,
     prog: Optional[str] = None,
     extends: Optional[Callable] = None,
-    **kwargs
+    **kwargs,
 ) -> Callable:
     # start with a parent parser that will initially
     # try to parse a typeo toml config argument
@@ -530,13 +530,14 @@ def _make_wrapper(
                         f.__name__,
                         len(provided_args),
                         ", ".join(provided_args),
-                        extended_func.__name__
+                        extend_func.__name__,
+                        len(result),
                     )
                 )
                 for arg, val in zip(provided_args, result):
                     kw[arg] = val
 
-            extend_params = inspect.signature(extend).parameters
+            extend_params = inspect.signature(extend_func).parameters
             extend_kwargs = {}
             for arg, value in kw.items():
                 if arg in extend_params:

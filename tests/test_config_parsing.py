@@ -10,7 +10,7 @@ from unittest.mock import Mock
 import pytest
 import toml
 
-from typeo import actions, spoof, scriptify
+from typeo import actions, scriptify, spoof
 
 
 @pytest.fixture(scope="module", params=[None, ".", "config.toml"])

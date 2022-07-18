@@ -6,27 +6,31 @@ from enum import Enum
 
 import pytest
 
-from typeo import spoof, scriptify
+from typeo import scriptify, spoof
 
 
-@pytest.fixture(params=[
-    typing.List,
-    typing.Iterable,
-    typing.Tuple,
-    typing.Sequence,
-    pytest.param(list, marks=pytest.mark.gtpy38),
-    pytest.param(abc.Iterable, marks=pytest.mark.gtpy38),
-    pytest.param(tuple, marks=pytest.mark.gtpy38),
-    pytest.param(abc.Sequence, marks=pytest.mark.gtpy38)
-])
+@pytest.fixture(
+    params=[
+        typing.List,
+        typing.Iterable,
+        typing.Tuple,
+        typing.Sequence,
+        pytest.param(list, marks=pytest.mark.gtpy38),
+        pytest.param(abc.Iterable, marks=pytest.mark.gtpy38),
+        pytest.param(tuple, marks=pytest.mark.gtpy38),
+        pytest.param(abc.Sequence, marks=pytest.mark.gtpy38),
+    ]
+)
 def array_container(request):
     return request.param
 
 
-@pytest.fixture(params=[
-    typing.Callable,
-    pytest.param(abc.Callable, marks=pytest.mark.gtpy38)
-])
+@pytest.fixture(
+    params=[
+        typing.Callable,
+        pytest.param(abc.Callable, marks=pytest.mark.gtpy38),
+    ]
+)
 def callable_annotation(request):
     return request.param
 
@@ -36,7 +40,6 @@ def set_argv(*args):
 
 
 def test_scriptify():
-
     def func(a: int, b: int = 10):
         return a + b
 
@@ -55,7 +58,6 @@ def test_scriptify():
 
 @pytest.mark.depends(on=["test_scriptify"])
 def test_scriptify_with_array_like(array_container):
-
     def seq_func(a: array_container[str]):
         return "".join(a)
 
@@ -86,7 +88,6 @@ def test_scriptify_with_array_like(array_container):
 
 @pytest.mark.depends(on=["test_scriptify"])
 def test_scriptify_with_optional_arg():
-
     def optional_func(a: int, b: typing.Optional[str] = None):
         return (b or "test") * a
 
@@ -113,7 +114,6 @@ def test_scriptify_with_optional_arg():
 
     with pytest.raises(ValueError):
         scriptify(bad_optional_func)
-
 
 
 @pytest.fixture(params=[True, False])
@@ -258,7 +258,9 @@ def test_scriptify_with_literal(array_container, literal_annotation):
 
 
 @pytest.mark.depends(on=["test_scriptify_with_literal"])
-def test_scriptify_with_containered_literals(array_container, literal_annotation):
+def test_scriptify_with_containered_literals(
+    array_container, literal_annotation
+):
     annotation, args, values = literal_annotation
     annotation = array_container[annotation]
 
@@ -300,7 +302,7 @@ def test_unions_with_blank_generics(array_container):
     """
 
     @scriptify
-    def blank_generic_func(a: Union[str, array_container]):
+    def blank_generic_func(a: typing.Union[str, array_container]):
         return [i + "a" for i in a]
 
     args = ["test", "one", "two"]
@@ -315,7 +317,7 @@ def test_unions_with_blank_generics(array_container):
     assert result == [i + "a" for i in args]
 
     @scriptify
-    def blank_generic_func(a: Union[int, array_container]):
+    def blank_generic_func(a: typing.Union[int, array_container]):
         return [i + 2 for i in a]
 
     set_argv("--a", *"123")
@@ -324,7 +326,6 @@ def test_unions_with_blank_generics(array_container):
 
 @pytest.mark.depends(on=["test_scriptify"])
 def test_callables(array_container, callable_annotation):
-
     @scriptify
     def func_of_func(f: callable_annotation):
         return f(3, 2)
