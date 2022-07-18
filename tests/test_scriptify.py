@@ -312,7 +312,6 @@ def test_unions_with_blank_generics(array_container):
 
     # TODO: uncomment this when we implement
     # action for mapping to tuples
-    # assert isinstance(result, generic)
     assert isinstance(result, abc.Sequence)
     assert result == [i + "a" for i in args]
 

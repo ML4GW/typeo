@@ -340,6 +340,11 @@ def make_parser(
         # further parsing
         origin, type_ = _get_origin_and_type(annotation)
 
+        if origin is None and type_ in _ARRAY_ORIGINS:
+            # this will happen for untyped containers in py39+,
+            # so just treat it like the case for py38
+            origin, type_ = type_, None
+
         # if the annotation can have multiple types,
         # figure out which type to pass to the parser
         if origin is Union:
