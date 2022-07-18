@@ -10,7 +10,7 @@ from unittest.mock import Mock
 import pytest
 import toml
 
-from hermes.typeo import actions, spoof, typeo
+from typeo import actions, scriptify, spoof
 
 
 @pytest.fixture(scope="module", params=[None, ".", "config.toml"])
@@ -352,29 +352,29 @@ def test_config(simple_config_no_fail, fname, set_argv):
         # is correctly set regardless of whether
         # the function uses a default or not
         expected = simple_func(a, b)
-        result = typeo(simple_func)()
+        result = scriptify(simple_func)()
         assert result == expected
 
         expected = simple_func_with_default(a, b)
-        result = typeo(simple_func_with_default)()
+        result = scriptify(simple_func_with_default)()
         assert result == expected
     else:
         # we didn't specify b, and simple_func requires it,
         # so this should raise a parsing error -> sys exit
         with pytest.raises(SystemExit):
-            typeo(simple_func)()
+            scriptify(simple_func)()
 
         # now make sure that the function with a default
         # uses the deafult value when we don't specify b
         expected = simple_func_with_default(a)
-        result = typeo(simple_func_with_default)()
+        result = scriptify(simple_func_with_default)()
         assert expected == result
 
     # make sure passing extra args when we specify
     # a config raises a ValueError
     with pytest.raises(ValueError):
         set_argv("--a", "10")
-        typeo(simple_func)()
+        scriptify(simple_func)()
 
     # make sure that subcommands with no arguments
     # run successfully even if the command section
@@ -384,7 +384,7 @@ def test_config(simple_config_no_fail, fname, set_argv):
 
     set_argv("::sub")
     func = simple_func if b is not None else simple_func_with_default
-    assert typeo(func, sub=subcommand)() == "foo"
+    assert scriptify(func, sub=subcommand)() == "foo"
 
     # subcommands with only default values should be
     # able to execute, even if the commands section
@@ -392,7 +392,7 @@ def test_config(simple_config_no_fail, fname, set_argv):
     def subcommand_with_defaults(c: int = 3):
         return c + 1
 
-    assert typeo(func, sub=subcommand_with_defaults)() == 4
+    assert scriptify(func, sub=subcommand_with_defaults)() == 4
 
     # finally, subcommands with required arguments should fail
     # if the commands section of the config is missing
@@ -400,7 +400,7 @@ def test_config(simple_config_no_fail, fname, set_argv):
         return c + 1
 
     with pytest.raises(SystemExit):
-        typeo(func, sub=bad_subcommand)()
+        scriptify(func, sub=bad_subcommand)()
 
 
 @pytest.mark.depends(on=["test_config"])
@@ -412,7 +412,7 @@ def test_underscore_variables(simple_config_with_underscores, fname, set_argv):
 
     set_argv()
     expected = simple_func_with_underscore_vars(a, b)
-    result = typeo(simple_func_with_underscore_vars)()
+    result = scriptify(simple_func_with_underscore_vars)()
     assert expected == result
 
 
@@ -433,14 +433,14 @@ def test_config_booleans(bool_config, fname, set_argv):
     # of the function without a default parses
     # the correct value for the boolean
     set_argv()
-    result = typeo(simple_boolean_func)()
+    result = scriptify(simple_boolean_func)()
     expected = simple_boolean_func(a, config_bool)
     assert result == expected
 
     # now make sure this still happens for both defaults
     for default in [True, False]:
         func = get_boolean_func_with_default(default)
-        result = typeo(func)()
+        result = scriptify(func)()
         expected = func(a, config_bool)
         assert result == expected
 
@@ -453,7 +453,7 @@ def test_config_lists(list_config, fname, set_argv):
     _test_action(expected, fname)
 
     set_argv()
-    assert typeo(simple_list_func)() == simple_list_func(a, b)
+    assert scriptify(simple_list_func)() == simple_list_func(a, b)
 
 
 @pytest.mark.depends(on=["test_config"])
@@ -465,7 +465,7 @@ def test_config_dicts(dict_config, fname, set_argv):
     _test_action(expected, fname)
 
     set_argv()
-    assert typeo(simple_dict_func)() == simple_dict_func(a, b)
+    assert scriptify(simple_dict_func)() == simple_dict_func(a, b)
 
 
 @pytest.mark.depends(on=["test_config"])
@@ -482,45 +482,45 @@ def test_script_sections(simple_config_with_section, fname, set_argv):
         # is correctly set regardless of whether
         # the function uses a default or not
         expected = simple_func(a, b)
-        result = typeo(simple_func)()
+        result = scriptify(simple_func)()
         assert result == expected
 
         expected = simple_func_with_default(a, b)
-        result = typeo(simple_func_with_default)()
+        result = scriptify(simple_func_with_default)()
         assert result == expected
     else:
         # we didn't specify b, and simple_func requires it,
         # so this should raise a parsing error -> sys exit
         with pytest.raises(SystemExit):
-            typeo(simple_func)()
+            scriptify(simple_func)()
 
         # now make sure that the function with a default
         # uses the deafult value when we don't specify b
         expected = simple_func_with_default(a)
-        result = typeo(simple_func_with_default)()
+        result = scriptify(simple_func_with_default)()
         assert expected == result
 
     set_argv(":bar")
     with pytest.raises(SystemExit):
-        typeo(simple_func)()
+        scriptify(simple_func)()
 
     def subcommand():
         return 4
 
     set_argv(":foo:sub")
     func = simple_func if b is not None else simple_func_with_default
-    assert typeo(func, sub=subcommand)() == 4
+    assert scriptify(func, sub=subcommand)() == 4
 
     def subcommand_with_default(c: int = 4):
         return c + 1
 
-    assert typeo(func, sub=subcommand_with_default)() == 5
+    assert scriptify(func, sub=subcommand_with_default)() == 5
 
     def bad_subcommand(c: int):
         return c + 1
 
     with pytest.raises(SystemExit):
-        typeo(func, sub=bad_subcommand)()
+        scriptify(func, sub=bad_subcommand)()
 
 
 class SubcommandsTester:
@@ -551,7 +551,7 @@ class SubcommandsTester:
         section = section or ""
         set_argv(f":{section}:{command}")
 
-        result = typeo(
+        result = scriptify(
             self.base_func, command1=self.command1, command2=self.command2
         )()
 
@@ -673,7 +673,7 @@ class SubcommandsWithReturnsTester:
         section = section or ""
         set_argv(f":{section}:{command}")
 
-        result = typeo(
+        result = scriptify(
             self.base_func, command1=self.command1, command2=self.command2
         )()
 

@@ -7,6 +7,14 @@ from typing import Callable, Mapping, Optional
 import toml
 
 
+class MaybeIterableAction(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        if len(values) == 1:
+            setattr(namespace, self.dest, self.type(values[0]))
+            return
+        setattr(namespace, self.dest, list(map(self.type, values)))
+
+
 class MappingAction(argparse.Action):
     """Action for parsing dictionary arguments
 
