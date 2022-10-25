@@ -437,6 +437,7 @@ def _make_wrapper(
     f: Callable,
     prog: Optional[str] = None,
     extends: Optional[Callable] = None,
+    return_result: bool = False,
     **kwargs,
 ) -> Callable:
     # start with a parent parser that will initially
@@ -576,7 +577,9 @@ def _make_wrapper(
                     extend_kwargs[arg] = value
 
             result = extend_func(**extend_kwargs)
-        return result
+
+        if return_result:
+            return result
 
     return wrapper
 
@@ -637,12 +640,27 @@ def scriptify(*args, **kwargs) -> Callable:
                                     The other number to add whose description inexplicably spans multiple lines  # noqa
 
     Args:
-        f:
-            The function to expose via a command line parser
+        f: The function to expose via a command line parser
         prog:
             The name to assign to command line parser `prog`
             argument. If not provided, `f.__name__` will
             be used.
+        extends:
+            Tuple specifying a function `g` whose arguments `f`
+            is meant to provide, as well as the names of
+            the arguments of `g` that the outputs of `f` will be
+            used to feed. If specified, all other arguments of
+            `g` will be exposed to the command line and passed
+            through straight-fowardly. In this case, `f` is
+            executed first, then its outputs are passed to
+            the corresponding inputs of `g`.
+        return_result:
+            Whether to return the output of any functions executed
+            when `f` is called without any arguments. If left as
+            `False`, `f()` will return None. This is the default
+            behavior due to issues with conda raising an error
+            on script-executed functions with return values, see
+            https://github.com/ML4GW/BBHNet/issues/173
     """
 
     # the only argument is the function itself,
@@ -730,6 +748,6 @@ def spoof(
 
     argv = sys.argv
     sys.argv = [None] + list(args)
-    kwargs = scriptify(wrapper)()
+    kwargs = scriptify(wrapper, return_result=True)()
     sys.argv = argv
     return kwargs
