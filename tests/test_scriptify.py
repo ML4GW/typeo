@@ -3,10 +3,15 @@ import sys
 import typing
 from collections import abc
 from enum import Enum
+from functools import partial
 
 import pytest
 
 from typeo import scriptify, spoof
+
+# spoof this up front since we'll want returns
+# to ensure things are actually being executed
+scriptify = partial(scriptify, return_result=True)
 
 
 @pytest.fixture(
@@ -54,6 +59,17 @@ def test_scriptify():
 
     # now test that we can pass a name to the scriptify parser
     assert scriptify("script name")(func)() == 12
+
+
+@pytest.mark.depends(on=["test_scriptify"])
+def test_scriptify_without_returns():
+    from typeo import scriptify
+
+    def func(a: int, b: int = 10):
+        return a + b
+
+    set_argv("--a", "1", "--b", "2")
+    assert scriptify(func)() is None
 
 
 @pytest.mark.depends(on=["test_scriptify"])

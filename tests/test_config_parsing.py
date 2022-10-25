@@ -4,6 +4,7 @@ import shutil
 import sys
 from collections import OrderedDict
 from contextlib import contextmanager
+from functools import partial
 from typing import Dict, Sequence
 from unittest.mock import Mock
 
@@ -11,6 +12,8 @@ import pytest
 import toml
 
 from typeo import actions, scriptify, spoof
+
+scriptify = partial(scriptify, return_result=True)
 
 
 @pytest.fixture(scope="module", params=[None, ".", "config.toml"])
