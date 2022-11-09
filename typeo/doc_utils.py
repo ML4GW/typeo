@@ -16,17 +16,18 @@ def parse_help(args: str, arg_name: str) -> str:
             Should be formatted like
             ```
             '''
-            arg1:
-                The description for arg1
+            arg1: The description for arg1 in one line
             arg2:
-                The description for arg 2 that
-                spans multiple lines
+                The description for arg 2 that spans
+                multiple lines
             arg3:
-                Another description
+                Another description on the line below
             '''
+            Argument descriptions should either be
+            fully inline with the argument name, or
+            on lines below the argument name each indented
+            by four spaces.
             ```
-            With 8 spaces before each argument name
-            and 12 before the lines of its description.
         arg_name:
             The name of the argument whose help string
             to search for
@@ -36,19 +37,31 @@ def parse_help(args: str, arg_name: str) -> str:
         replaced by spaces
     """
 
-    # TODO: more robustness on number of spaces
-    arg_re = re.compile(rf"(?m)(\s){{8}}{arg_name}:$")
+    # check if there's an entry in the doc_str for
+    # the argument name at all
+    match = re.search(rf"(?m)(?P<spaces>^( )+){arg_name}:", args)
+    if match is None:
+        return ""
 
-    doc_str, started = "", False
-    for line in args.splitlines():
-        # TODO: more robustness on spaces
-        if arg_re.fullmatch(line):
-            started = True
-        elif not line.startswith(" " * 12) and started:
-            break
-        elif started:
-            doc_str += " " + line.strip()
-    return doc_str
+    # strip out the number of spaces before the
+    # argument name to put all args at 0 indent
+    args = re.sub("(?m)^" + match.group("spaces"), "", args)
+
+    # now check either for the description on the
+    # same line as the argument, or in any indented
+    # rows immediately following it
+    indent = r"\n {4}"
+    desc = f"(.+|({indent}.+)+)"
+    match = re.search(rf"(?m)(?<=^{arg_name}:){desc}", args)
+
+    # if there's no description that looks like this
+    # then short circuit now and just return nothing
+    if match is None:
+        return ""
+
+    # now strip out the newlines and indententations
+    description = match.group(0)
+    return re.sub("(?m)" + indent, " ", description).strip()
 
 
 def parse_doc(f: Callable):
@@ -74,9 +87,13 @@ def parse_doc(f: Callable):
         # arguments section by using the expected
         # returns header. If there are None, just
         # keep moving
+
         try:
             args, _ = args.split("Returns:\n")
         except ValueError:
             pass
 
+    # check if the doc is blank
+    if not doc.strip():
+        doc = ""
     return doc, args

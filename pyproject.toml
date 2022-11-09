@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "typeo"
-version = "0.1.5"
+version = "0.1.6"
 description = "Utilities for running functions as scripts"
 authors = ["Alec Gunny <alec.gunny@gmail.com>"]
 readme = "README.md"
