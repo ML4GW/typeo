@@ -7,7 +7,7 @@ from functools import partial
 
 import pytest
 
-from typeo import scriptify, spoof
+from typeo import scriptify
 
 # spoof this up front since we'll want returns
 # to ensure things are actually being executed
@@ -384,37 +384,6 @@ def test_callables(array_container, callable_annotation):
 
 
 @pytest.mark.depends(on=["test_scriptify"])
-def test_scriptify_extends():
-    def reusable_func(a: int, b: str):
-        return a * b
-
-    def extending_func(c: int, **kwargs):
-        return c * 2
-
-    func = scriptify(extends=(reusable_func, ["a"]))(extending_func)
-    assert func(3) == 6
-
-    set_argv("--c", "2", "--b", "test")
-    assert func() == "test" * 4
-
-    # now test to make sure we can have arguments overlap
-    # between the extender and extendee, as long as they
-    # aren't the argument being extended
-    def extending_func(c: int, b: str, **kwargs):
-        if b == "Thom":
-            return c * 2
-        return c * 3
-
-    func = scriptify(extends=(reusable_func, ["a"]))(extending_func)
-    assert func(3, "Thom") == 6
-    assert func(3, "Jonny") == 9
-    assert func() == "test" * 6
-
-    set_argv("--c", "2", "--b", "Thom")
-    assert func() == "Thom" * 4
-
-
-@pytest.mark.depends(on=["test_scriptify"])
 def test_scriptify_kwargs():
     def reusable_func(a: int, b: str):
         return a * b
@@ -445,7 +414,7 @@ def test_scriptify_kwargs():
 
 
 @pytest.mark.depends(on=["test_scriptify"])
-def test_scriptify_args():
+def test_scriptify_remainder():
     def reusable_func(a: int, b: str):
         return a * b
 
@@ -455,26 +424,10 @@ def test_scriptify_args():
     with pytest.raises(ValueError):
         scriptify(kwargs=reusable_func)(script_func)
 
-    def script_func(c: str, **kwargs):
-        output = " ".join(kwargs["args"])
+    def script_func(c: str, rest: str):
+        output = " ".join(rest)
         return c + " " + output
 
-    func = scriptify(args=reusable_func)(script_func)
+    func = scriptify(rest=reusable_func)(script_func)
     set_argv("--a", "2", "--b", "Yorke", "--c", "Thom")
     assert func() == "Thom --a 2 --b Yorke"
-
-
-@pytest.mark.depends(on=["test_scriptify"])
-def test_spoof():
-    def simple_func(a: int, b: str):
-        return b * a
-
-    result = spoof(simple_func, "--a", "2", "--b", "cat")
-    assert result["a"] == 2
-    assert result["b"] == "cat"
-
-    with pytest.raises(SystemExit):
-        spoof(simple_func, "--a", "2")
-
-    with pytest.raises(ValueError):
-        spoof(simple_func, "--a", "2", filename="pyproject.toml")
