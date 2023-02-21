@@ -7,7 +7,7 @@ import typeo.actions as actions
 from typeo.doc_utils import parse_doc
 from typeo.parser import make_parser
 from typeo.subcommands import Subcommand
-from typeo.utils import CustomHelpFormatter, make_dummy
+from typeo.utils import CustomHelpFormatter, is_kwargs, make_dummy
 
 
 class _RemainderParser:
@@ -82,7 +82,8 @@ def _make_subcommands(
             "Can't parse remaining args for function {} "
             "and have subcommands".format(remainder_parser.parser.prog)
         )
-    remainder_parser = _RemainderParser(None, lambda: None, [])
+    if remainder_parser is None:
+        remainder_parser = _RemainderParser(None, lambda: None, [])
     return subcommands, remainder_parser
 
 
@@ -120,11 +121,20 @@ def _make_wrapper(
     # arguments created by the parser
     dummy_func = make_dummy(func, list(other_kwargs))
     booleans = make_parser(dummy_func, parser)
-    full_args = list(inspect.signature(func).parameters)
+
+    func_params = inspect.signature(func).parameters
+    full_args = list(func_params)
     func_args = list(inspect.signature(dummy_func).parameters)
 
     # include any arguments we may want to pass to **kwargs
     if kwargs is not None:
+        if not any(map(is_kwargs, func_params.values())):
+            raise ValueError(
+                "No **kwargs to pass arguments of function {} to".format(
+                    kwargs
+                )
+            )
+
         dummy = make_dummy(kwargs, func_args)
         bools = make_parser(dummy, parser)
         booleans.update(bools)

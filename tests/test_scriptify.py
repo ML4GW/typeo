@@ -1,3 +1,4 @@
+import argparse
 import math
 import sys
 import typing
@@ -191,7 +192,7 @@ def test_subparsers():
     def f2(a: int, c: int):
         return a - c
 
-    @scriptify(add=f1, subtract=f2)
+    @scriptify(cmds=dict(add=f1, subtract=f2))
     def f(i: int):
         d["f"] = i
 
@@ -212,7 +213,7 @@ def test_subparsers_with_returns():
     def f2(c: int, **kwargs):
         return kwargs["a"] - c
 
-    @scriptify(add=f1, subtract=f2)
+    @scriptify(cmds=dict(add=f1, subtract=f2))
     def f(i: int):
         return {"a": i * 2}
 
@@ -378,7 +379,7 @@ def test_callables(array_container, callable_annotation):
     set_argv("--fs", "math.sqrt", "math.log")
     assert func_of_funcs() == answer
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(argparse.ArgumentTypeError):
         set_argv("--f", "bad.libary.name")
         func_of_func()
 
@@ -417,12 +418,6 @@ def test_scriptify_kwargs():
 def test_scriptify_remainder():
     def reusable_func(a: int, b: str):
         return a * b
-
-    def script_func(c: str):
-        return
-
-    with pytest.raises(ValueError):
-        scriptify(kwargs=reusable_func)(script_func)
 
     def script_func(c: str, rest: str):
         output = " ".join(rest)
