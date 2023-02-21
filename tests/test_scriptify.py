@@ -1,3 +1,4 @@
+import argparse
 import math
 import sys
 import typing
@@ -7,7 +8,7 @@ from functools import partial
 
 import pytest
 
-from typeo import scriptify, spoof
+from typeo import scriptify
 
 # spoof this up front since we'll want returns
 # to ensure things are actually being executed
@@ -191,7 +192,7 @@ def test_subparsers():
     def f2(a: int, c: int):
         return a - c
 
-    @scriptify(add=f1, subtract=f2)
+    @scriptify(cmds=dict(add=f1, subtract=f2))
     def f(i: int):
         d["f"] = i
 
@@ -202,6 +203,25 @@ def test_subparsers():
     set_argv("--i", "4", "subtract", "--a", "9", "--c", "3")
     assert f() == 6
     assert d["f"] == 4
+
+
+@pytest.mark.depends(on=["test_scriptify"])
+def test_subparsers_with_returns():
+    def f1(b: int, **kwargs):
+        return kwargs["a"] + b
+
+    def f2(c: int, **kwargs):
+        return kwargs["a"] - c
+
+    @scriptify(cmds=dict(add=f1, subtract=f2))
+    def f(i: int):
+        return {"a": i * 2}
+
+    set_argv("--i", "2", "add", "--b", "2")
+    assert f() == 6
+
+    set_argv("--i", "4", "subtract", "--c", "3")
+    assert f() == 5
 
 
 @pytest.mark.depends(on=["test_scriptify"])
@@ -359,53 +379,50 @@ def test_callables(array_container, callable_annotation):
     set_argv("--fs", "math.sqrt", "math.log")
     assert func_of_funcs() == answer
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(argparse.ArgumentTypeError):
         set_argv("--f", "bad.libary.name")
         func_of_func()
 
 
 @pytest.mark.depends(on=["test_scriptify"])
-def test_scriptify_extends():
+def test_scriptify_kwargs():
     def reusable_func(a: int, b: str):
         return a * b
 
-    def extending_func(c: int, **kwargs):
-        return c * 2
+    def script_func(c: str):
+        return
 
-    func = scriptify(extends=(reusable_func, ["a"]))(extending_func)
-    assert func(3) == 6
+    with pytest.raises(ValueError):
+        scriptify(kwargs=reusable_func)(script_func)
 
-    set_argv("--c", "2", "--b", "test")
-    assert func() == "test" * 4
+    def script_func(c: str, **kwargs):
+        output = reusable_func(**kwargs)
+        return c + " " + output
 
-    # now test to make sure we can have arguments overlap
-    # between the extender and extendee, as long as they
-    # aren't the argument being extended
-    def extending_func(c: int, b: str, **kwargs):
-        if b == "Thom":
-            return c * 2
-        return c * 3
+    func = scriptify(kwargs=reusable_func)(script_func)
+    assert func("Thom", a=2, b="Yorke") == "Thom YorkeYorke"
 
-    func = scriptify(extends=(reusable_func, ["a"]))(extending_func)
-    assert func(3, "Thom") == 6
-    assert func(3, "Jonny") == 9
-    assert func() == "test" * 6
+    set_argv("--a", "2", "--b", "Yorke", "--c", "Thom")
+    assert func() == "Thom YorkeYorke"
 
-    set_argv("--c", "2", "--b", "Thom")
-    assert func() == "Thom" * 4
+    def script_with_reused_args(a: int, c: str, **kwargs):
+        return c * a + " " + reusable_func(a=a, **kwargs)
+
+    func = scriptify(kwargs=reusable_func)(script_with_reused_args)
+    assert func(a=2, c="Thom", b="Yorke") == "ThomThom YorkeYorke"
+    set_argv("--a", "2", "--b", "Yorke", "--c", "Thom")
+    assert func() == "ThomThom YorkeYorke"
 
 
 @pytest.mark.depends(on=["test_scriptify"])
-def test_spoof():
-    def simple_func(a: int, b: str):
-        return b * a
+def test_scriptify_remainder():
+    def reusable_func(a: int, b: str):
+        return a * b
 
-    result = spoof(simple_func, "--a", "2", "--b", "cat")
-    assert result["a"] == 2
-    assert result["b"] == "cat"
+    def script_func(c: str, rest: str):
+        output = " ".join(rest)
+        return c + " " + output
 
-    with pytest.raises(SystemExit):
-        spoof(simple_func, "--a", "2")
-
-    with pytest.raises(ValueError):
-        spoof(simple_func, "--a", "2", filename="pyproject.toml")
+    func = scriptify(rest=reusable_func)(script_func)
+    set_argv("--a", "2", "--b", "Yorke", "--c", "Thom")
+    assert func() == "Thom --a 2 --b Yorke"

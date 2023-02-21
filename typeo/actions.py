@@ -2,9 +2,11 @@ import argparse
 import importlib
 import os
 import re
-from typing import Callable, Mapping, Optional
+from typing import Callable, List, Mapping, Optional
 
 import toml
+
+from typeo.subcommands import Subcommand
 
 
 class MaybeIterableAction(argparse.Action):
@@ -47,7 +49,7 @@ class MappingAction(argparse.Action):
             try:
                 k, v = value.split("=")
             except ValueError:
-                raise argparse.ArgumentError(
+                raise argparse.ArgumentTypeError(
                     self,
                     "Couldn't parse value {} passed to "
                     "argument {}".format(value, self.dest),
@@ -87,7 +89,7 @@ class CallableAction(argparse.Action):
         try:
             lib = importlib.import_module(module)
         except ModuleNotFoundError:
-            raise argparse.ArgumentError(
+            raise argparse.ArgumentTypeError(
                 self,
                 "Could not find module {} for callable argument {}".format(
                     module, self.dest
@@ -99,7 +101,7 @@ class CallableAction(argparse.Action):
             # aligns with the Callable __args__ if there are any
             return getattr(lib, fn)
         except AttributeError:
-            raise argparse.ArgumentError(
+            raise argparse.ArgumentTypeError(
                 self,
                 "Module {} has no function {} for callable argument {}".format(
                     module, fn, self.dest
@@ -119,10 +121,16 @@ class CallableAction(argparse.Action):
 
 class TypeoTomlAction(argparse.Action):
     def __init__(
-        self, *args, bools: Optional[Mapping[str, bool]] = None, **kwargs
+        self,
+        *args,
+        subcommands: List[Subcommand],
+        bools: Optional[Mapping[str, bool]] = None,
+        **kwargs,
     ) -> None:
         self.bools = bools
-        assert kwargs["nargs"] == "?"
+        self.subcommands = subcommands
+        assert kwargs["nargs"] == "*"
+
         self.base_regex = re.compile(r"(?<!\\)\$\{base.(\w+)\}")
         self.env_regex = re.compile(r"(?<!\\)\$\{(\w+)\}")
         super().__init__(*args, **kwargs)
@@ -142,24 +150,22 @@ class TypeoTomlAction(argparse.Action):
         # or typeo base-section wildcard by being formatted
         # as ${} (with a \ escaping the $ if it's there)
         value = str(value)
-        base_match = self.base_regex.search(value)
-        if base_match is not None:
-            varname = base_match.group(1)
-            base_value = self._get_base_value(value, varname)
+        matches = list(set(self.base_regex.findall(value)))
+        for match in matches:
+            base_value = self._get_base_value(value, match)
             replace = self._parse_value(base_value)
-            value = self.base_regex.sub(replace, value)
-        else:
-            env_match = self.env_regex.search(value)
-            if env_match is not None:
-                varname = env_match.group(1)
-                try:
-                    replace = os.environ[varname]
-                except KeyError:
-                    raise ValueError(
-                        "No environment variable {}, referenced "
-                        "in typeo config value {}".format(varname, value)
-                    )
-                value = self.env_regex.sub(replace, value)
+            value = re.sub(rf"\${{base.{match}}}", replace, value)
+
+        matches = list(set(self.env_regex.findall(value)))
+        for match in matches:
+            try:
+                replace = os.environ[match]
+            except KeyError:
+                raise ValueError(
+                    "No environment variable {}, referenced "
+                    "in typeo config value {}".format(match, value)
+                )
+            value = re.sub(rf"\${{{match}}}", replace, value)
         return value
 
     def _parse_value(self, value):
@@ -186,7 +192,7 @@ class TypeoTomlAction(argparse.Action):
             bool_default = None
 
         if bool_default is None and isinstance(value, bool):
-            raise argparse.ArgumentError(
+            raise argparse.ArgumentTypeError(
                 self,
                 "Can't parse non-boolean argument "
                 "'{}' with value {}".format(arg, value),
@@ -227,100 +233,107 @@ class TypeoTomlAction(argparse.Action):
                 args += value + " "
         return args
 
-    def _get_sections(self, config, section, command, filename):
+    def _get_subsection(self, config, section, filename):
+        if section is None:
+            return config, None
+
         try:
             # check to see if there are any script-specific
             # config sections at all
             scripts = config.pop("scripts")
         except KeyError:
+            if section is not None:
+                raise argparse.ArgumentTypeError(
+                    "Specified script '{}' but no 'typeo.scripts' "
+                    "table found in config file '{}'".format(section, filename)
+                ) from None
+            section = config
             scripts = None
-            if section is not None and command is not None:
-                # if we specified both a script _and_ a command for
-                # that script, but there's no script section
-                # to pull commands from, we don't know where to
-                # get our args from, so I think all we can do is
-                # raise an error here
-                raise argparse.ArgumentError(
-                    self,
-                    "Specified script '{}' and command '{}', but"
-                    "no 'script' table in config file '{}'".format(
-                        section, command, filename
-                    ),
-                )
-            elif command is not None:
-                # if we specified a command and not a script,
-                # then see if there are args associated with
-                # that command at the `typeo` level of the config
-                try:
-                    commands = config.pop("commands")[command]
-                except KeyError:
-                    commands = None
-            else:
-                commands = None
         else:
-            # if we do have a `scripts` section of the config,
-            # see if we have args associated with the script
-            # we passed at the command line
             try:
-                scripts = scripts[section]
+                section = scripts[section]
             except KeyError:
-                # if not, then there will be no script-specific
-                # args passed _or_ args passed to the indicated
-                # command (which could be fine if the command can
-                # run without any args. That will be decided by
-                # the actual typeo parser at parse time)
-                scripts, commands = None, None
+                raise argparse.ArgumentTypeError(
+                    "Specified script '{}' but 'typeo.scripts.{}' "
+                    "table found in config file '{}'".format(
+                        section, section, filename
+                    )
+                ) from None
+            scripts = section
+        return section, scripts
+
+    def _get_sections(self, config, section, subcommands, filename):
+        section, scripts = self._get_subsection(config, section, filename)
+
+        commands = {}
+        for command, value in subcommands.items():
+            try:
+                cmd_section = section.pop(command)
+            except KeyError:
+                commands[command] = (value, {})
+                continue
+
+            try:
+                subsection = cmd_section[value]
+            except KeyError:
+                # let this go uncaught in case this function
+                # takes no arguments
+                commands[command] = (value, {})
             else:
-                # see if we have any command-specific arguments
-                # for the indicated script
-                try:
-                    commands = scripts.pop("commands")[command]
-                except KeyError:
-                    commands = None
+                commands[command] = (value, subsection)
         return scripts, commands
 
-    def __call__(self, parser, namespace, value, option_string=None):
-        if value is None:
-            value = "pyproject.toml"
+    def _parse_cmd_line(self, values):
+        filename, section, subcommands = None, None, {}
 
-        # allow specification of the form filename(:script)(:command),
-        # where `script` and `command` are optional and
-        # - `script` specifies a sub-table of the `typeo` table
-        #   in the config file that has arguments specific to
-        #   a particular script that's part of the project. A
-        #   blank argument here (i.e. either `filename` or
-        #   `filename::comand`) will only pull arguments from
-        #   the `typeo` section of the config
-        # - `command` indicates a particular command for
-        #   the indicated script
-        try:
-            filename, section, command = value.split(":")
-        except ValueError:
-            # we have at most one colon in `value`, so
-            # command is definitely blank
-            command = None
+        commands_to_find = [i.name for i in self.subcommands]
+        if values is None and len(self.subcommands):
+            raise ValueError(
+                "Must specify commands " + " ".join(commands_to_find)
+            )
+        elif values is None:
+            return "pyproject.toml", section, subcommands
 
-            # try a single split to see if we specified
-            # a script subsection of the config
+        for i, value in enumerate(values):
             try:
-                filename, section = value.split(":")
+                key, value = value.split("=")
             except ValueError:
-                # no colons at all, so just use the filename
+                if i:
+                    raise ValueError(
+                        f"Can't parse typeo argument {value}"
+                    ) from None
                 filename = value
-                section = None
-        else:
-            # if section is the empty string, we have a
-            # filename::command, so there's no script subsection
-            section = section or None
+            else:
+                if key == "config" and filename is not None:
+                    raise ValueError(
+                        "Got multiple values for config: {} and {}".format(
+                            value, filename
+                        )
+                    )
+                if key == "script":
+                    section = value
+                else:
+                    try:
+                        commands_to_find.remove(key)
+                    except ValueError:
+                        raise ValueError(
+                            f"Subcommand {key} not found"
+                        ) from None
+                    subcommands[key] = value
+        if len(commands_to_find):
+            raise ValueError(
+                "No subcommand for commands {} specified".format(
+                    " ".join(commands_to_find)
+                )
+            )
+        filename = filename or "pyproject.toml"
+        return filename, section, subcommands
 
-        if filename == "":
-            # if filename is now the empty string, we indicated
-            # a subsection and/or a command, but no file. So
-            # default to using pyproject.toml
-            filename = "pyproject.toml"
-        elif os.path.isdir(filename):
-            # if `filename` is a directory, look for a
-            # pyproject.toml at that location
+    def __call__(self, parser, namespace, values, option_string=None):
+        values = values or None
+        filename, section, subcommands = self._parse_cmd_line(values)
+
+        if os.path.isdir(filename):
             filename = os.path.join(filename, "pyproject.toml")
 
         try:
@@ -330,7 +343,7 @@ class TypeoTomlAction(argparse.Action):
         except FileNotFoundError:
             dirname = os.path.dirname(filename) or "."
             basename = os.path.basename(filename)
-            raise argparse.ArgumentError(
+            raise argparse.ArgumentTypeError(
                 self,
                 "Could not find typeo config file {} in directory {}".format(
                     basename, dirname
@@ -348,7 +361,7 @@ class TypeoTomlAction(argparse.Action):
         try:
             config = config["typeo"]
         except KeyError:
-            raise argparse.ArgumentError(
+            raise argparse.ArgumentTypeError(
                 self, f"No 'typeo' section in config file {filename}"
             )
 
@@ -358,7 +371,7 @@ class TypeoTomlAction(argparse.Action):
             self.base = {}
 
         scripts, commands = self._get_sections(
-            config, section, command, filename
+            config, section, subcommands, filename
         )
 
         # start by parsing the root typeo-level config options
@@ -369,13 +382,9 @@ class TypeoTomlAction(argparse.Action):
             # parse them out of the corresponding section
             args += self._parse_section(scripts)
 
-        if command is not None:
-            # we specified a command, so add it as a positional
-            # argument _after_ all the global arguments
-            args += command + " "
-            if commands is not None:
-                # add in any command-specific arguments after the
-                # command argument has been specified
-                args += self._parse_section(commands)
+        for subcommand in self.subcommands:
+            value, section = commands[subcommand.name]
+            args += value + " "
+            args += self._parse_section(section)
 
         setattr(namespace, self.dest, args.split())

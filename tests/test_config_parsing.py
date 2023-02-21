@@ -11,7 +11,8 @@ from unittest.mock import Mock
 import pytest
 import toml
 
-from typeo import actions, scriptify, spoof
+from typeo import actions, scriptify
+from typeo.subcommands import Subcommand
 
 scriptify = partial(scriptify, return_result=True)
 
@@ -260,7 +261,7 @@ def subcommands_config(command):
     return {
         "typeo": {
             "a": int(command[-1]),
-            "commands": {
+            "command": {
                 "command1": OrderedDict([("name", "thom"), ("age", 5)]),
                 "command2": OrderedDict(
                     [
@@ -279,7 +280,7 @@ def subcommands_config_no_sections(
     subcommands_config, command, fname, format_wrong
 ):
     with dump_config(subcommands_config, fname, format_wrong):
-        d = subcommands_config["typeo"]["commands"][command]
+        d = subcommands_config["typeo"]["command"][command]
         yield command, d
 
 
@@ -287,10 +288,10 @@ def subcommands_config_no_sections(
 def subcommands_with_sections_config(
     subcommands_config, command, fname, format_wrong
 ):
-    commands = subcommands_config["typeo"].pop("commands")
-    subcommands_config["typeo"]["scripts"] = {"foo": {"commands": commands}}
+    commands = subcommands_config["typeo"].pop("command")
+    subcommands_config["typeo"]["scripts"] = {"foo": {"command": commands}}
     with dump_config(subcommands_config, fname, format_wrong):
-        d = subcommands_config["typeo"]["scripts"]["foo"]["commands"][command]
+        d = subcommands_config["typeo"]["scripts"]["foo"]["command"][command]
         yield command, d
 
 
@@ -304,23 +305,29 @@ def _test_action(expected, fname, bools=None, section=None, cmd=None):
     passed in a specific `section` or by a `cmd`.
     """
 
-    mock = Mock()
     parser = argparse.ArgumentParser(prog="dummy")
 
+    if cmd is not None:
+        subcommands = [Subcommand("command", **{cmd.__name__: cmd})]
+    else:
+        subcommands = []
+
     action = parser.add_argument(
-        "--foo", action=actions.TypeoTomlAction, bools=bools, nargs="?"
+        "--foo",
+        action=actions.TypeoTomlAction,
+        bools=bools,
+        subcommands=subcommands,
+        nargs="*",
     )
     mock = Mock()
 
-    value = fname
+    value = [fname] if fname is not None else None
     if section is not None:
-        value = value or ""
-        value += ":" + section
-        if cmd is not None:
-            value += ":" + cmd
-    elif cmd is not None:
-        value = value or ""
-        value += "::" + cmd
+        value = value or []
+        value.append(f"script={section}")
+    if cmd is not None:
+        value = value or []
+        value.append(f"command={cmd.__name__}")
 
     # make sure the parsed value assigned to the mock's
     # `foo` attribute matches up with the expected value
@@ -341,7 +348,9 @@ def test_config(simple_config_no_fail, fname, set_argv):
 
     parser = argparse.ArgumentParser(prog="dummy")
     with pytest.raises(KeyError):
-        parser.add_argument("--foo", action=actions.TypeoTomlAction)
+        parser.add_argument(
+            "--foo", action=actions.TypeoTomlAction, subcommands=[]
+        )
 
     expected = ["--a", str(a)]
     if b is not None:
@@ -385,9 +394,9 @@ def test_config(simple_config_no_fail, fname, set_argv):
     def subcommand():
         return "foo"
 
-    set_argv("::sub")
+    set_argv("cmd=cmd1")
     func = simple_func if b is not None else simple_func_with_default
-    assert scriptify(func, sub=subcommand)() == "foo"
+    assert scriptify(func, cmd={"cmd1": subcommand})() == "foo"
 
     # subcommands with only default values should be
     # able to execute, even if the commands section
@@ -395,7 +404,7 @@ def test_config(simple_config_no_fail, fname, set_argv):
     def subcommand_with_defaults(c: int = 3):
         return c + 1
 
-    assert scriptify(func, sub=subcommand_with_defaults)() == 4
+    assert scriptify(func, cmd={"cmd1": subcommand_with_defaults})() == 4
 
     # finally, subcommands with required arguments should fail
     # if the commands section of the config is missing
@@ -403,7 +412,7 @@ def test_config(simple_config_no_fail, fname, set_argv):
         return c + 1
 
     with pytest.raises(SystemExit):
-        scriptify(func, sub=bad_subcommand)()
+        scriptify(func, cmd={"cmd1": bad_subcommand})()
 
 
 @pytest.mark.depends(on=["test_config"])
@@ -479,7 +488,7 @@ def test_script_sections(simple_config_with_section, fname, set_argv):
     expected += ["--a", str(a)]
     _test_action(expected, fname, section="foo")
 
-    set_argv(":foo")
+    set_argv("script=foo")
     if b is not None:
         # make sure that the config value of b
         # is correctly set regardless of whether
@@ -503,27 +512,28 @@ def test_script_sections(simple_config_with_section, fname, set_argv):
         result = scriptify(simple_func_with_default)()
         assert expected == result
 
-    set_argv(":bar")
-    with pytest.raises(SystemExit):
+    set_argv("script=bar")
+    with pytest.raises(argparse.ArgumentTypeError):
         scriptify(simple_func)()
 
     def subcommand():
         return 4
 
-    set_argv(":foo:sub")
+    set_argv("script=foo", "sub=cmd1")
     func = simple_func if b is not None else simple_func_with_default
-    assert scriptify(func, sub=subcommand)() == 4
+    assert scriptify(func, sub={"cmd1": subcommand})() == 4
 
     def subcommand_with_default(c: int = 4):
         return c + 1
 
-    assert scriptify(func, sub=subcommand_with_default)() == 5
+    wrapped = scriptify(func, sub={"cmd1": subcommand_with_default})
+    assert wrapped() == 5
 
     def bad_subcommand(c: int):
         return c + 1
 
     with pytest.raises(SystemExit):
-        scriptify(func, sub=bad_subcommand)()
+        scriptify(func, sub={"cmd1": bad_subcommand})()
 
 
 class SubcommandsTester:
@@ -549,14 +559,16 @@ class SubcommandsTester:
             k = k.replace("_", "-")
             expected.append(f"--{k}")
             expected.append(str(v))
-        _test_action(expected, fname, cmd=command, section=section)
 
-        section = section or ""
-        set_argv(f":{section}:{command}")
+        cmd = getattr(self, command)
+        _test_action(expected, fname, cmd=cmd, section=section)
 
-        result = scriptify(
-            self.base_func, command1=self.command1, command2=self.command2
-        )()
+        argv = [f"command={command}"]
+        if section is not None:
+            argv.append(f"script={section}")
+        set_argv(*argv)
+        commands = {"command1": self.command1, "command2": self.command2}
+        result = scriptify(self.base_func, command=commands)()
 
         name = " ".join([v for k, v in command_dict.items() if "name" in k])
         assert self.mock.a == a
@@ -582,38 +594,12 @@ def test_subcommands_with_section(
     )
 
 
-@pytest.mark.depends(on=["test_config"])
-def test_spoof(simple_config_no_fail, fname):
-    a, b = simple_config_no_fail
-
-    if fname is None:
-        result = spoof(simple_func_with_default)
-    else:
-        result = spoof(simple_func_with_default, filename=fname)
-
-    assert result["a"] == a
-    assert result["b"] == b or "foo"
-
-
-@pytest.mark.depends(on=["test_config"])
-def test_spoof_with_section(simple_config_with_section, fname):
-    a, b = simple_config_with_section
-
-    if fname is None:
-        result = spoof(simple_func_with_default, script="foo")
-    else:
-        result = spoof(simple_func_with_default, filename=fname, script="foo")
-
-    assert result["a"] == a
-    assert result["b"] == b or "foo"
-
-
 @pytest.fixture
 def subcommands_with_returns_config(command):
     return {
         "typeo": {
             "a": int(command[-1]),
-            "commands": {
+            "command": {
                 "command1": OrderedDict([("name", "thom")]),
                 "command2": OrderedDict(
                     [
@@ -632,7 +618,7 @@ def subcommands_with_returns_config_no_sections(
 ):
     subcommands_config = subcommands_with_returns_config
     with dump_config(subcommands_config, fname, format_wrong):
-        d = subcommands_config["typeo"]["commands"][command]
+        d = subcommands_config["typeo"]["command"][command]
         yield command, d
 
 
@@ -641,10 +627,10 @@ def subcommands_with_returns_with_sections_config(
     subcommands_with_returns_config, command, fname, format_wrong
 ):
     subcommands_config = subcommands_with_returns_config
-    commands = subcommands_config["typeo"].pop("commands")
-    subcommands_config["typeo"]["scripts"] = {"foo": {"commands": commands}}
+    commands = subcommands_config["typeo"].pop("command")
+    subcommands_config["typeo"]["scripts"] = {"foo": {"command": commands}}
     with dump_config(subcommands_config, fname, format_wrong):
-        d = subcommands_config["typeo"]["scripts"]["foo"]["commands"][command]
+        d = subcommands_config["typeo"]["scripts"]["foo"]["command"][command]
         yield command, d
 
 
@@ -671,14 +657,17 @@ class SubcommandsWithReturnsTester:
             k = k.replace("_", "-")
             expected.append(f"--{k}")
             expected.append(str(v))
-        _test_action(expected, fname, cmd=command, section=section)
 
-        section = section or ""
-        set_argv(f":{section}:{command}")
+        cmd = getattr(self, command)
+        _test_action(expected, fname, cmd=cmd, section=section)
 
-        result = scriptify(
-            self.base_func, command1=self.command1, command2=self.command2
-        )()
+        argv = [f"command={command}"]
+        if section is not None:
+            argv.append(f"script={section}")
+        set_argv(*argv)
+
+        commands = {"command1": self.command1, "command2": self.command2}
+        result = scriptify(self.base_func, command=commands)()
 
         name = " ".join([v for k, v in command_dict.items() if "name" in k])
         assert self.mock.name == name
