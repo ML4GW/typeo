@@ -205,6 +205,25 @@ def test_subparsers():
 
 
 @pytest.mark.depends(on=["test_scriptify"])
+def test_subparsers_with_returns():
+    def f1(b: int, **kwargs):
+        return kwargs["a"] + b
+
+    def f2(c: int, **kwargs):
+        return kwargs["a"] - c
+
+    @scriptify(add=f1, subtract=f2)
+    def f(i: int):
+        return {"a": i * 2}
+
+    set_argv("--i", "2", "add", "--b", "2")
+    assert f() == 6
+
+    set_argv("--i", "4", "subtract", "--c", "3")
+    assert f() == 5
+
+
+@pytest.mark.depends(on=["test_scriptify"])
 def test_enums(array_container):
     class Member(Enum):
         SINGER = "Thom"
@@ -393,6 +412,56 @@ def test_scriptify_extends():
 
     set_argv("--c", "2", "--b", "Thom")
     assert func() == "Thom" * 4
+
+
+@pytest.mark.depends(on=["test_scriptify"])
+def test_scriptify_kwargs():
+    def reusable_func(a: int, b: str):
+        return a * b
+
+    def script_func(c: str):
+        return
+
+    with pytest.raises(ValueError):
+        scriptify(kwargs=reusable_func)(script_func)
+
+    def script_func(c: str, **kwargs):
+        output = reusable_func(**kwargs)
+        return c + " " + output
+
+    func = scriptify(kwargs=reusable_func)(script_func)
+    assert func("Thom", a=2, b="Yorke") == "Thom YorkeYorke"
+
+    set_argv("--a", "2", "--b", "Yorke", "--c", "Thom")
+    assert func() == "Thom YorkeYorke"
+
+    def script_with_reused_args(a: int, c: str, **kwargs):
+        return c * a + " " + reusable_func(a=a, **kwargs)
+
+    func = scriptify(kwargs=reusable_func)(script_with_reused_args)
+    assert func(a=2, c="Thom", b="Yorke") == "ThomThom YorkeYorke"
+    set_argv("--a", "2", "--b", "Yorke", "--c", "Thom")
+    assert func() == "ThomThom YorkeYorke"
+
+
+@pytest.mark.depends(on=["test_scriptify"])
+def test_scriptify_args():
+    def reusable_func(a: int, b: str):
+        return a * b
+
+    def script_func(c: str):
+        return
+
+    with pytest.raises(ValueError):
+        scriptify(kwargs=reusable_func)(script_func)
+
+    def script_func(c: str, **kwargs):
+        output = " ".join(kwargs["args"])
+        return c + " " + output
+
+    func = scriptify(args=reusable_func)(script_func)
+    set_argv("--a", "2", "--b", "Yorke", "--c", "Thom")
+    assert func() == "Thom --a 2 --b Yorke"
 
 
 @pytest.mark.depends(on=["test_scriptify"])

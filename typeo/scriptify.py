@@ -7,6 +7,7 @@ from enum import Enum
 from functools import wraps
 from typing import (
     TYPE_CHECKING,
+    Any,
     Callable,
     Dict,
     List,
@@ -303,6 +304,14 @@ def _standardize_none_origin(type_):
     return origin, type_
 
 
+def _is_kwargs(param: inspect.Parameter):
+    return param.kind is inspect._ParameterKind.VAR_KEYWORD
+
+
+def _is_args(param: inspect.Parameter):
+    return param.kind is inspect._ParameterKind.VAR_POSITIONAL
+
+
 def make_parser(
     f: Callable,
     parser: argparse.ArgumentParser,
@@ -347,7 +356,7 @@ def make_parser(
     # and add them as options to the parser
     booleans = {}
     for name, param in parameters.items():
-        if param.kind == inspect._ParameterKind.VAR_KEYWORD:
+        if _is_args(param) or _is_kwargs(param):
             # This skips **kwargs style arguments, which we won't
             # be able to parse
             continue
@@ -430,7 +439,157 @@ def make_parser(
         # use dashes instead of underscores for argument names
         name = name.replace("_", "-")
         parser.add_argument(f"--{name}", **kwargs)
-    return booleans
+    return booleans, parameters
+
+
+def _make_extra_args_parsers(
+    parameters: List[inspect.Parameter],
+    func_name: str,
+    args: Optional[Callable] = None,
+    kwargs: Optional[Callable] = None,
+) -> Tuple[
+    Optional[argparse.ArgumentParser], Optional[argparse.ArgumentParser]
+]:
+    if kwargs is None and args is None:
+        return (None, None), (None, None)
+
+    _has_kwargs = any([_is_kwargs(p) for p in parameters.values()])
+    if not _has_kwargs:
+        if kwargs is not None and args is None:
+            postfix = f"function {kwargs.__name__}"
+        elif kwargs is not None:
+            postfix = f"functions {kwargs.__name__} and {args.__name__}"
+        else:
+            postfix = f"function {args.__name__}"
+        raise ValueError(
+            "{} has no **kwargs argument for "
+            "passing args of {}".format(func_name, postfix)
+        )
+
+    parsers = []
+    for func in [args, kwargs]:
+        if func is None:
+            parsers.append((None, None))
+            continue
+
+        def dummy():
+            pass
+
+        params = []
+        signature = inspect.signature(func)
+        for param in signature.parameters.values():
+            if param.name not in parameters:
+                params.append(param)
+        dummy.__signature__ = inspect.Signature(parameters=params)
+
+        parser = argparse.ArgumentParser(add_help=False, prog="dummy")
+        make_parser(dummy, parser)
+        parsers.append((parser, func.__name__))
+    return tuple(parsers)
+
+
+def _parse_remainder(
+    remainder: List[str],
+    kw: Dict,
+    args_parser: Optional[argparse.ArgumentParser] = None,
+    kwargs_parser: Optional[argparse.ArgumentParser] = None,
+    args_func_name: Optional[str] = None,
+    kwargs_func_name: Optional[str] = None,
+):
+    if args_parser is not None:
+        try:
+            args_parser.parse_args(remainder)
+        except SystemExit as e:
+            args_parser.error(
+                "Error while parsing *args from function {}: "
+                "{}".format(args_func_name, str(e))
+            )
+        kw["args"] = remainder
+
+    if kwargs_parser is not None:
+        try:
+            kwgs = kwargs_parser.parse_args(remainder)
+        except SystemExit as e:
+            kwargs_parser.error(
+                "Error while parsing **kwargs from function {}: "
+                "{}".format(kwargs_func_name, str(e))
+            )
+        kw.update(vars(kwgs))
+
+
+def _parse_subcommand(
+    func_kwargs: Dict[str, Any],
+    scriptify_kwargs: Dict[str, Callable],
+    parameters: List[inspect.Parameter],
+):
+    # see if a subprogram was specified
+    try:
+        subcommand = func_kwargs.pop("_subcommand")
+    except KeyError:
+        subcommand = subkw = None
+    else:
+        # if we specified a subcommand, extract the arguments
+        # that are specific to it. Convert its name
+        # back to underscores first to grab the actual function
+        subcommand = scriptify_kwargs[subcommand.replace("-", "_")]
+        subparams = inspect.signature(subcommand).parameters
+        subkw = {}
+        for name, param in subparams.items():
+            if _is_kwargs(param):
+                continue
+            elif name not in parameters:
+                subkw[name] = func_kwargs.pop(name)
+            else:
+                subkw[name] = func_kwargs[name]
+
+    return subcommand, subkw
+
+
+def _execute_subcommand(
+    subkw: Optional[Dict], subcommand: Optional[Callable], result: Any
+):
+    # run the subcommand if one was specified
+    if subcommand is not None:
+        # if the main function returned a dictionary,
+        # pass it as kwargs to the subcommand
+        if isinstance(result, dict):
+            subkw.update(result)
+        return subcommand(**subkw)
+    return result
+
+
+def _execute_extends(
+    extend_func: Callable,
+    provided_args: List[str],
+    kwargs: Dict[str, Any],
+    result: Dict[str, Any],
+    func_name: str,
+):
+    if len(provided_args) == 1:
+        kwargs[provided_args[0]] = result
+    elif len(provided_args) != len(result):
+        # TODO: check if result doesn't have a __len__
+        raise ValueError(
+            "Expected function {} to return {} arguments {} "
+            "for use in function {}, but only found {}".format(
+                func_name,
+                len(provided_args),
+                ", ".join(provided_args),
+                extend_func.__name__,
+                len(result),
+            )
+        )
+    else:
+        for arg, val in zip(provided_args, result):
+            kwargs[arg] = val
+
+    extend_params = inspect.signature(extend_func).parameters
+    extend_kwargs = {}
+    for arg, value in kwargs.items():
+        if arg in extend_params:
+            extend_kwargs[arg] = value
+
+    return extend_func(**extend_kwargs)
 
 
 def _make_wrapper(
@@ -438,7 +597,9 @@ def _make_wrapper(
     prog: Optional[str] = None,
     extends: Optional[Callable] = None,
     return_result: bool = False,
-    **kwargs,
+    args: Optional[Callable] = None,
+    kwargs: Optional[Callable] = None,
+    **other_kwargs,
 ) -> Callable:
     # start with a parent parser that will initially
     # try to parse a typeo toml config argument
@@ -462,13 +623,20 @@ def _make_wrapper(
         formatter_class=CustomHelpFormatter,
         parents=[parent_parser],
     )
-    booleans = make_parser(f, parser, extends)
+    booleans, parameters = make_parser(f, parser, extends)
+
+    # make parsers fo
+    args, kwargs = _make_extra_args_parsers(
+        parameters, f.__name__, args, kwargs
+    )
+    args_parser, args_func_name = args
+    kwargs_parser, kwargs_func_name = kwargs
 
     # if we have subcommands, add subparsers for each
     # one of them with their own arguments
-    if len(kwargs) > 0:
+    if len(other_kwargs) > 0:
         subparsers = parser.add_subparsers(dest="_subcommand", required=True)
-        for func_name, func in kwargs.items():
+        for func_name, func in other_kwargs.items():
             description, _ = parse_doc(func)
             subparser = subparsers.add_parser(
                 func_name.replace("_", "-"),
@@ -476,7 +644,7 @@ def _make_wrapper(
                 formatter_class=CustomHelpFormatter,
             )
 
-            bools = make_parser(func, subparser)
+            bools, _ = make_parser(func, subparser)
             booleans.update(bools)
 
     # now add an argument for parsing a config file, using
@@ -523,60 +691,36 @@ def _make_wrapper(
                     "Found additional arguments '{}' when passing "
                     "typeo config".format(remainder)
                 )
-            kw = vars(parser.parse_args(config_args.typeo))
-        else:
-            kw = vars(parser.parse_args(remainder))
+            remainder = config_args.typeo
+
+        kw, remainder = parser.parse_known_args(remainder)
+        kw = vars(kw)
+        if remainder and (args_parser is None and kwargs_parser is None):
+            parser.error(
+                "unrecognized arguments: {}".format(" ".join(remainder))
+            )
+        elif remainder:
+            _parse_remainder(
+                remainder,
+                kw,
+                args_parser,
+                kwargs_parser,
+                args_func_name,
+                kwargs_func_name,
+            )
 
         # see if a subprogram was specified
-        try:
-            subcommand = kw.pop("_subcommand")
-        except KeyError:
-            subcommand = None
-        else:
-            # if we specified a subcommand, extract the arguments
-            # that are specific to it. Convert its name
-            # back to underscores first to grab the actual function
-            subcommand = kwargs[subcommand.replace("-", "_")]
-            parameters = inspect.signature(subcommand).parameters
-            subkw = {name: kw.pop(name) for name in parameters}
+        subcommand, subkw = _parse_subcommand(kw, other_kwargs, parameters)
 
-        # run the main function
+        # run the main function and potentially the subcommand
         result = f(*args, **kw)
-
-        # run the subcommand if one was specified
-        if subcommand is not None:
-            # if the main function returned a dictionary,
-            # pass it as kwargs to the subcommand
-            if isinstance(result, dict):
-                subkw.update(result)
-            result = subcommand(**subkw)
+        result = _execute_subcommand(subkw, subcommand, result)
 
         if extends is not None:
             extend_func, provided_args = extends
-            if len(provided_args) == 1:
-                kw[provided_args[0]] = result
-            elif len(provided_args) != len(result):
-                # TODO: check if result doesn't have a __len__
-                raise ValueError(
-                    "Expected function {} to return {} arguments {} "
-                    "for use in function {}, but only found {}".format(
-                        f.__name__,
-                        len(provided_args),
-                        ", ".join(provided_args),
-                        extend_func.__name__,
-                        len(result),
-                    )
-                )
-                for arg, val in zip(provided_args, result):
-                    kw[arg] = val
-
-            extend_params = inspect.signature(extend_func).parameters
-            extend_kwargs = {}
-            for arg, value in kw.items():
-                if arg in extend_params:
-                    extend_kwargs[arg] = value
-
-            result = extend_func(**extend_kwargs)
+            result = _execute_extends(
+                extend_func, provided_args, kw, result, f.__name__
+            )
 
         if return_result:
             return result
